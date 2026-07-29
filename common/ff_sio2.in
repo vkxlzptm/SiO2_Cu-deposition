@@ -1,0 +1,46 @@
+# ============================================================================
+#  common/ff_sio2.in  --  a-SiO2 슬랩용 힘장 정의 (S1, S2 전용)
+# ============================================================================
+#  melt-quench 입력(in.sio2 v7)과 파라미터가 완전히 동일해야 한다.
+#  이 프로젝트의 모든 결론은 '조건 간 상대 비교'이므로, 단계마다 힘장이
+#  미묘하게 달라지면 비교 자체가 무의미해진다. 그래서 한 곳에서만 관리한다.
+#
+#  type 1 = O  (q = -1.2)
+#  type 2 = Si (q = +2.4)
+#
+#  [중요] 이 파일은 pair_style 을 '선언'한다. LAMMPS 에서 pair_style 재선언은
+#  기존 pair_coeff 를 전부 삭제하므로, Cu(type 3)를 추가하는 S3 이후 단계는
+#  이 파일을 include 하지 말고 common/ff_full.in 을 쓸 것.
+#
+#  [BKS 출처] van Beest, Kramer, van Santen, PRL 64, 1955 (1990)
+#  [overlay 안전망] Buckingham catastrophe(r->0 에서 -C/r^6 발산) 대응.
+#    ZBL(~r^-1)은 r^-6 을 이길 수 없어 무효 -> r^-12 LJ 로 교체.
+#    cutoff 를 BKS 자체 반발 시작점(O-O 1.50 A, Si-O 1.10 A)에 맞춰
+#    WCA 형으로 두어 힘 불연속을 최소화. 0.05~3.0 A 전 구간 단조반발 검증 완료.
+# ============================================================================
+
+pair_style      hybrid/overlay buck/coul/long 10.0 lj/cut 1.5
+
+# --- BKS Buckingham + Ewald 실공간 (A[eV], rho[A], C[eV*A^6]) ---
+pair_coeff      1 1 buck/coul/long  1388.7730  0.362318  175.0000   # O-O
+pair_coeff      1 2 buck/coul/long 18003.7572  0.205205  133.5381   # Si-O
+pair_coeff      2 2 buck/coul/long     0.0     1.0         0.0      # Si-Si (A=0)
+
+# --- r^-12 반발 안전망 (eps[eV], sigma[A], cutoff=sigma -> WCA) ---
+pair_coeff      1 1 lj/cut  3.0  1.50  1.50    # O-O
+pair_coeff      1 2 lj/cut  4.0  1.10  1.10    # Si-O
+pair_coeff      2 2 lj/cut  0.0  1.0   1.0     # Si-Si (BKS A=0 이라 위험 없음)
+
+# --- 장거리 정전기 ---
+#  10 A cutoff 유지: 이 값에서 BKS 는 유리 밀도를 과대평가(본 구조 2.607 vs
+#  실험 2.20 g/cc)하지만, 5.5 A 로 줄이면 탄성물성이 틀어진다. 계면 역학이
+#  핵심인 본 과제에서는 10 A 를 유지하고 결론은 상대 비교로만 해석한다.
+kspace_style    pppm 1.0e-4
+
+#  [슬랩 전용] boundary p p f 필수. volfactor 3.0 은 LAMMPS 권장값
+#  (더 크면 비효율, 더 작으면 slab-slab 상호작용 잔존).
+#  Yeh & Berkowitz, J Chem Phys 111, 3155 (1999)
+kspace_modify   slab 3.0
+
+neighbor        2.0 bin
+neigh_modify    every 1 delay 0 check yes

@@ -1,0 +1,6 @@
+*.lammpstrj
+*.restart.*
+dump*/
+log.cite
+.DS_Store
+__pycache__/

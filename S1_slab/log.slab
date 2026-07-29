@@ -4,16 +4,17 @@ LAMMPS (23 Jun 2022 - Update 1)
 # ============================================================================
 #  입력 : ../init_struct/sio2_quenched.data  (2160 atoms, Si 720 / O 1440,
 #                                             rho = 2.607 g/cc, 박스 28.73 x 28.83 x 33.27)
-#  출력 : slab_raw.data     <- S2(표면 이완)의 입력
-#         zprof_*_raw.dat   <- S2 전후 비교용 z-밀도 프로파일 baseline
+#  출력 : slab_raw.data        <- S2(표면 이완)의 입력
+#         zprof_*_raw.dat      <- S2 전후 비교용 z-밀도 프로파일 baseline
 #         slab_raw.lammpstrj
 #
 #  실행 : lmp_serial -in in.slab -log log.slab
 #
-#  이 단계는 동역학을 돌리지 않는다(run 0). 목적은 세 가지뿐:
-#   (1) PPPM slab 설정이 에러 없이 뜨는지
-#   (2) 절단 직후 PE / 배위수 / pzz 를 기록해 S2 이완의 '전(before)' 기준을 확보
-#   (3) 원자 손실 0 확인
+#  동역학 없음. 목적:
+#   (A) 절단 전 주기 상태 에너지 E_bulk 기록
+#   (B) 절단 후 에너지 E_slab -> gamma_unrelaxed = (E_slab - E_bulk)/2A
+#       (S4 의 W_adh 와 완전히 같은 계산 방식이라 미리 검증하는 의미)
+#   (C) PPPM slab 설정이 뜨는지, 원자 손실 0 인지, 배위수/Pzz 가 예상대로인지
 # ============================================================================
 
 # ---------------- 1. Init ----------------
@@ -29,41 +30,14 @@ Reading data file ...
   2160 atoms
   reading velocities ...
   2160 velocities
-  read_data CPU = 0.009 seconds
+  read_data CPU = 0.008 seconds
 
 mass            1 15.9994          # O
 mass            2 28.0855          # Si
 # 전하는 data 파일에 이미 들어있다 (O -1.2 / Si +2.4). set 으로 재지정하지 않는다.
 
-# ---------------- 2. 진공 추가 + z 비주기화 ----------------
-#  [순서 중요] (a) 먼저 z 를 늘리고 (b) 그 다음 boundary 를 f 로 바꾼다.
-#   반대로 하면 zhi(34.087) 경계에 걸친 원자가 lost 될 수 있다.
-#
-#  [remap 금지] remap 을 쓰면 좌표가 박스와 함께 스케일링되어 슬랩 자체가
-#   z 방향으로 3.6배 늘어난다. 절대 쓰지 말 것. 원자는 z=0.82~34.09 에 그대로 두고
-#   박스만 위로 연다 -> 기존 z 주기경계면이 그대로 절단면이 되어
-#   상(z~34.09) / 하(z~0.82) 두 개의 표면이 생긴다. 하단은 S2 에서 고정한다.
-#
-#  [z=120 A 근거] slab-slab 이미지 간격 = 3*Lz - 두께 = 360 - 54 = 306 A 로 충분.
-#   실제 제약은 정전기가 아니라 기하학이다:
-#     0~34    SiO2 슬랩
-#     ~34~65  Cu (섬 성장 최악 시나리오 포함)
-#     90~95   S5 의 fix deposit 삽입 영역 (막 상단과 25 A 이상 이격)
-#     118     S5 의 상단 반사벽
-change_box      all z final 0.0 120.0 units box
-Changing box ...
-  orthogonal box = (0.70531404 0.70777887 0) to (29.433599 29.53646 120)
-change_box      all boundary p p f
-Changing box ...
-WARNING: Resetting image flags for non-periodic dimensions (src/domain.cpp:1928)
-
-# z 이미지플래그 초기화 (이후 MSD/unwrap 분석에서 z 방향 오염 방지)
-set             group all image NULL NULL 0
-Setting atom values ...
-  2160 settings made for image
-
-# ---------------- 3. Force field ----------------
-#  melt-quench 와 완전히 동일. kspace_modify slab 3.0 도 이 안에 있다.
+# ---------------- 2. Force field ----------------
+#  melt-quench 와 완전히 동일. (kspace_modify slab 은 여기 없음 -- 아래 3-B 에서 선언)
 include         ../common/ff_sio2.in
 # ============================================================================
 #  common/ff_sio2.in  --  a-SiO2 슬랩용 힘장 정의 (S1, S2 전용)
@@ -104,15 +78,15 @@ pair_coeff      2 2 lj/cut  0.0  1.0   1.0     # Si-Si (BKS A=0 이라 위험 �
 #  핵심인 본 과제에서는 10 A 를 유지하고 결론은 상대 비교로만 해석한다.
 kspace_style    pppm 1.0e-4
 
-#  [슬랩 전용] boundary p p f 필수. volfactor 3.0 은 LAMMPS 권장값
-#  (더 크면 비효율, 더 작으면 slab-slab 상호작용 잔존).
-#  Yeh & Berkowitz, J Chem Phys 111, 3155 (1999)
-kspace_modify   slab 3.0
+#  [주의] kspace_modify slab 3.0 은 여기에 두지 않는다.
+#   주기(p p p) 상태에서 slab 보정을 켜면 안 되고, 단계에 따라 절단 전/후
+#   두 상태를 모두 계산해야 하기 때문. 각 단계 스크립트에서 change_box 로
+#   boundary 를 p p f 로 바꾼 직후에 선언할 것.
 
 neighbor        2.0 bin
 neigh_modify    every 1 delay 0 check yes
 
-# ---------------- 4. 검증용 진단량 ----------------
+# ---------------- 3. 진단량 ----------------
 group           gO   type 1
 1440 atoms in group gO
 group           gSi  type 2
@@ -120,30 +94,34 @@ group           gSi  type 2
 
 compute         cnSi all coord/atom cutoff 2.0 1     # 각 원자 주변 O  개수
 compute         cnO  all coord/atom cutoff 2.0 2     # 각 원자 주변 Si 개수
-compute         avgSi gSi reduce ave c_cnSi          # <CN(Si-O)>  벌크값 4.017
-compute         avgO  gO  reduce ave c_cnO           # <CN(O-Si)>  벌크값 2.008
+compute         avgSi gSi reduce ave c_cnSi          # <CN(Si-O)>
+compute         avgO  gO  reduce ave c_cnO           # <CN(O-Si)>
 variable        pea equal pe/atoms
 
 thermo_style    custom step atoms pe v_pea press pxx pyy pzz vol c_avgSi c_avgO
 thermo          1
+
+# ---------------- 3-A. 절단 전 (주기) 기준 상태 ----------------
+print           "=========== A: bulk periodic reference ==========="
+=========== A: bulk periodic reference ===========
 run             0
 WARNING: No fixes with time integration, atoms won't move (src/verlet.cpp:60)
 PPPM initialization ...
   using 12-bit tables for long-range coulomb (src/kspace.cpp:342)
-  G vector (1/distance) = 0.28691472
-  grid = 24 24 150
+  G vector (1/distance) = 0.29874255
+  grid = 24 24 25
   stencil order = 5
-  estimated absolute RMS force accuracy = 0.0014543415
-  estimated relative force accuracy = 0.00010099843
+  estimated absolute RMS force accuracy = 0.0013812722
+  estimated relative force accuracy = 9.5924047e-05
   using double precision FFTW3
-  3d grid and FFT values/proc = 146072 86400
+  3d grid and FFT values/proc = 30752 14400
 Generated 0 of 1 mixed pair_coeff terms from geometric mixing rule
 Neighbor list info ...
   update every 1 steps, delay 0 steps, check yes
   max neighbors/atom: 2000, page size: 100000
   master list distance cutoff = 12
   ghost atom cutoff = 12
-  binsize = 6, bins = 5 5 20
+  binsize = 6, bins = 5 5 6
   4 neighbor lists, perpetual/occasional/extra = 2 2 0
   (1) pair buck/coul/long, perpetual
       attributes: half, newton on
@@ -165,12 +143,12 @@ Neighbor list info ...
       pair build: full/bin/atomonly
       stencil: full/bin/3d
       bin: standard
-Per MPI rank memory allocation (min/avg/max) = 22.55 | 22.55 | 22.55 Mbytes
+Per MPI rank memory allocation (min/avg/max) = 12.75 | 12.75 | 12.75 Mbytes
    Step        Atoms        PotEng         v_pea          Press           Pxx            Pyy            Pzz           Volume        c_avgSi         c_avgO    
-         0        2160  -41038.959     -18.999518     -1746.8629     -1047.0694     -301.20701     -3892.3124      99383.828      3.9166667      1.9583333    
-Loop time of 6.24e-07 on 1 procs for 0 steps with 2160 atoms
+         0        2160  -41686.444     -19.29928       1331.2466      3233.568       3731.0072     -2970.8355      27554.315      4.0166667      2.0083333    
+Loop time of 5.91e-07 on 1 procs for 0 steps with 2160 atoms
 
-320.5% CPU use with 1 MPI tasks x no OpenMP threads
+338.4% CPU use with 1 MPI tasks x no OpenMP threads
 
 MPI task timing breakdown:
 Section |  min time  |  avg time  |  max time  |%varavg| %total
@@ -181,7 +159,85 @@ Neigh   | 0          | 0          | 0          |   0.0 |  0.00
 Comm    | 0          | 0          | 0          |   0.0 |  0.00
 Output  | 0          | 0          | 0          |   0.0 |  0.00
 Modify  | 0          | 0          | 0          |   0.0 |  0.00
-Other   |            | 6.24e-07   |            |       |100.00
+Other   |            | 5.91e-07   |            |       |100.00
+
+Nlocal:           2160 ave        2160 max        2160 min
+Histogram: 1 0 0 0 0 0 0 0 0 0
+Nghost:          10425 ave       10425 max       10425 min
+Histogram: 1 0 0 0 0 0 0 0 0 0
+Neighs:         612118 ave      612118 max      612118 min
+Histogram: 1 0 0 0 0 0 0 0 0 0
+FullNghs:  1.22424e+06 ave 1.22424e+06 max 1.22424e+06 min
+Histogram: 1 0 0 0 0 0 0 0 0 0
+
+Total # of neighbors = 1224236
+Ave neighs/atom = 566.77593
+Neighbor list builds = 0
+Dangerous builds = 0
+#  [중요] $(...) 로 즉시 평가해 상수로 고정한다.
+#  'variable X equal pe' 로 쓰면 지연 평가라서 나중에 참조할 때 '현재' pe 가 나온다.
+variable        Ebulk  equal $(pe)
+variable        Ebulk  equal -41686.444024859039928
+variable        CNbulk equal $(c_avgSi)
+variable        CNbulk equal 4.0166666666666666075
+variable        Abox   equal $(lx*ly)      # 표면 1개의 면적 [A^2]
+variable        Abox   equal 828.19856677882194163      
+
+# ---------------- 3-B. 진공 추가 + z 비주기화 ----------------
+#  [순서 중요] (a) 먼저 z 를 늘리고 (b) 그 다음 boundary 를 f 로.
+#   반대로 하면 zhi(34.087) 경계에 걸친 원자가 lost 될 수 있다.
+#  [remap 금지] remap 을 쓰면 좌표가 박스와 함께 스케일링되어 슬랩 자체가 늘어난다.
+#   원자는 z=0.82~34.09 에 그대로 두고 박스만 위로 연다 -> 기존 z 주기경계면이
+#   그대로 절단면이 되어 상/하 두 개의 표면이 생긴다. 하단은 S2 에서 고정.
+#  [z=120 A 근거] slab-slab 이미지 간격 = 3*Lz - 두께 = 360 - 54 = 306 A 로 충분.
+#   실제 제약은 정전기가 아니라 기하학:
+#     0~34 슬랩 / ~34~65 Cu / 90~95 S5 증착원 삽입영역 / 118 S5 상단 반사벽
+change_box      all z final 0.0 120.0 units box
+Changing box ...
+  orthogonal box = (0.70531404 0.70777887 0) to (29.433599 29.53646 120)
+change_box      all boundary p p f
+Changing box ...
+WARNING: Resetting image flags for non-periodic dimensions (src/domain.cpp:1928)
+set             group all image NULL NULL 0
+Setting atom values ...
+  2160 settings made for image
+
+#  [슬랩 전용] boundary p p f 로 바꾼 직후에 선언. volfactor 3.0 은 LAMMPS 권장값
+#  (더 크면 비효율, 더 작으면 slab-slab 상호작용 잔존).
+#  Yeh & Berkowitz, J Chem Phys 111, 3155 (1999)
+kspace_modify   slab 3.0
+
+print           "=========== B: slab (cut, unrelaxed) ==========="
+=========== B: slab (cut, unrelaxed) ===========
+run             0
+WARNING: No fixes with time integration, atoms won't move (src/verlet.cpp:60)
+PPPM initialization ...
+  using 12-bit tables for long-range coulomb (src/kspace.cpp:342)
+  G vector (1/distance) = 0.28691472
+  grid = 24 24 150
+  stencil order = 5
+  estimated absolute RMS force accuracy = 0.0014543415
+  estimated relative force accuracy = 0.00010099843
+  using double precision FFTW3
+  3d grid and FFT values/proc = 146072 86400
+Generated 0 of 1 mixed pair_coeff terms from geometric mixing rule
+Per MPI rank memory allocation (min/avg/max) = 32.92 | 32.92 | 32.92 Mbytes
+   Step        Atoms        PotEng         v_pea          Press           Pxx            Pyy            Pzz           Volume        c_avgSi         c_avgO    
+         0        2160  -41038.959     -18.999518     -1746.8629     -1047.0694     -301.20701     -3892.3124      99383.828      3.0138889      1.5055556    
+Loop time of 6.48e-07 on 1 procs for 0 steps with 2160 atoms
+
+308.6% CPU use with 1 MPI tasks x no OpenMP threads
+
+MPI task timing breakdown:
+Section |  min time  |  avg time  |  max time  |%varavg| %total
+---------------------------------------------------------------
+Pair    | 0          | 0          | 0          |   0.0 |  0.00
+Kspace  | 0          | 0          | 0          |   0.0 |  0.00
+Neigh   | 0          | 0          | 0          |   0.0 |  0.00
+Comm    | 0          | 0          | 0          |   0.0 |  0.00
+Output  | 0          | 0          | 0          |   0.0 |  0.00
+Modify  | 0          | 0          | 0          |   0.0 |  0.00
+Other   |            | 6.48e-07   |            |       |100.00
 
 Nlocal:           2160 ave        2160 max        2160 min
 Histogram: 1 0 0 0 0 0 0 0 0 0
@@ -189,17 +245,113 @@ Nghost:           5128 ave        5128 max        5128 min
 Histogram: 1 0 0 0 0 0 0 0 0 0
 Neighs:         529948 ave      529948 max      529948 min
 Histogram: 1 0 0 0 0 0 0 0 0 0
-FullNghs:   1.0599e+06 ave  1.0599e+06 max  1.0599e+06 min
+FullNghs:  1.22424e+06 ave 1.22424e+06 max 1.22424e+06 min
 Histogram: 1 0 0 0 0 0 0 0 0 0
 
-Total # of neighbors = 1059896
-Ave neighs/atom = 490.69259
+Total # of neighbors = 1224236
+Ave neighs/atom = 566.77593
 Neighbor list builds = 0
 Dangerous builds = 0
+variable        Eslab  equal $(pe)
+variable        Eslab  equal -41038.959395193356613
+
+# ---------------- 4. 미이완 표면에너지 ----------------
+#  절단으로 표면이 2개 생기므로 2A 로 나눈다. 1 eV/A^2 = 16.0217663 J/m^2
+variable        gam0   equal (${Eslab}-${Ebulk})/(2*${Abox})
+variable        gam0   equal (-41038.9593951934-${Ebulk})/(2*${Abox})
+variable        gam0   equal (-41038.9593951934--41686.444024859)/(2*${Abox})
+variable        gam0   equal (-41038.9593951934--41686.444024859)/(2*828.198566778822)
+variable        gam0J  equal ${gam0}*16.0217663
+variable        gam0J  equal 0.390899390338187*16.0217663
+print           "-------------------------------------------------"
+-------------------------------------------------
+print           "E_bulk (periodic)   = ${Ebulk} eV"
+E_bulk (periodic)   = -41686.444024859 eV
+print           "E_slab (cut)        = ${Eslab} eV"
+E_slab (cut)        = -41038.9593951934 eV
+print           "cleavage energy     = $(v_Eslab-v_Ebulk) eV"
+cleavage energy     = 647.48462966560327914 eV
+print           "surface area A      = ${Abox} A^2  (표면 1개)"
+WARNING: Detected non-ASCII characters in input. Will try to continue by replacing with ASCII equivalents where known. (src/input.cpp:436)
+surface area A      = 828.198566778822 A^2  (���� 1��)
+print           "gamma_unrelaxed     = ${gam0} eV/A^2 = ${gam0J} J/m^2"
+gamma_unrelaxed     = 0.390899390338187 eV/A^2 = 6.26289867881091 J/m^2
+print           "<CN(Si-O)> bulk     = ${CNbulk}"
+<CN(Si-O)> bulk     = 4.01666666666667
+print           "-------------------------------------------------"
+-------------------------------------------------
+#  [정확도 주의] PPPM accuracy 1e-4 는 상대값이라 총에너지 -41039 eV 에 대해
+#  절대오차가 ~4 eV 수준. cleavage energy(수백 eV)에는 충분하지만,
+#  S4 의 W_adh 는 큰 값들의 작은 차이라 그때는 pppm 1e-5~1e-6 으로 조일 것.
 
 # ---------------- 5. z-밀도 프로파일 (S2 비교 baseline) ----------------
+#  [주의] fix ave/chunk 는 chunk compute ID 를 접두사 없이 받는다 (c_chO 아님).
+#  [주의] run 0 은 end_of_step 을 호출하지 않아 파일이 안 써진다 -> run 1.
+#         적분 fix 가 없으므로 원자는 움직이지 않는다.
 compute         chO  gO  chunk/atom bin/1d z lower 0.5 units box
 compute         chSi gSi chunk/atom bin/1d z lower 0.5 units box
-fix             pO  gO  ave/chunk 1 1 1 c_chO  density/mass file zprof_O_raw.dat
-ERROR: Chunk/atom compute does not exist for fix ave/chunk (src/fix_ave_chunk.cpp:311)
-Last command: fix             pO  gO  ave/chunk 1 1 1 c_chO  density/mass file zprof_O_raw.dat
+fix             pO  gO  ave/chunk 1 1 1 chO  density/mass file zprof_O_raw.dat
+fix             pSi gSi ave/chunk 1 1 1 chSi density/mass file zprof_Si_raw.dat
+run             1
+WARNING: No fixes with time integration, atoms won't move (src/verlet.cpp:60)
+PPPM initialization ...
+  using 12-bit tables for long-range coulomb (src/kspace.cpp:342)
+  G vector (1/distance) = 0.28691472
+  grid = 24 24 150
+  stencil order = 5
+  estimated absolute RMS force accuracy = 0.0014543415
+  estimated relative force accuracy = 0.00010099843
+  using double precision FFTW3
+  3d grid and FFT values/proc = 146072 86400
+Generated 0 of 1 mixed pair_coeff terms from geometric mixing rule
+Per MPI rank memory allocation (min/avg/max) = 33.2 | 33.2 | 33.2 Mbytes
+   Step        Atoms        PotEng         v_pea          Press           Pxx            Pyy            Pzz           Volume        c_avgSi         c_avgO    
+         0        2160  -41038.959     -18.999518     -1746.8629     -1047.0694     -301.20701     -3892.3124      99383.828      3.0138889      1.5055556    
+         1        2160  -41038.959     -18.999518     -1746.8629     -1047.0694     -301.20701     -3892.3124      99383.828      3.0138889      1.5055556    
+Loop time of 0.0178074 on 1 procs for 1 steps with 2160 atoms
+
+Performance: 4.852 ns/day, 4.947 hours/ns, 56.156 timesteps/s
+99.7% CPU use with 1 MPI tasks x no OpenMP threads
+
+MPI task timing breakdown:
+Section |  min time  |  avg time  |  max time  |%varavg| %total
+---------------------------------------------------------------
+Pair    | 0.0090607  | 0.0090607  | 0.0090607  |   0.0 | 50.88
+Kspace  | 0.0053211  | 0.0053211  | 0.0053211  |   0.0 | 29.88
+Neigh   | 0          | 0          | 0          |   0.0 |  0.00
+Comm    | 1.7645e-05 | 1.7645e-05 | 1.7645e-05 |   0.0 |  0.10
+Output  | 0.003091   | 0.003091   | 0.003091   |   0.0 | 17.36
+Modify  | 0.00030593 | 0.00030593 | 0.00030593 |   0.0 |  1.72
+Other   |            | 1.114e-05  |            |       |  0.06
+
+Nlocal:           2160 ave        2160 max        2160 min
+Histogram: 1 0 0 0 0 0 0 0 0 0
+Nghost:           5128 ave        5128 max        5128 min
+Histogram: 1 0 0 0 0 0 0 0 0 0
+Neighs:         529948 ave      529948 max      529948 min
+Histogram: 1 0 0 0 0 0 0 0 0 0
+FullNghs:  1.22424e+06 ave 1.22424e+06 max 1.22424e+06 min
+Histogram: 1 0 0 0 0 0 0 0 0 0
+
+Total # of neighbors = 1224236
+Ave neighs/atom = 566.77593
+Neighbor list builds = 0
+Dangerous builds = 0
+unfix           pO
+unfix           pSi
+
+# ---------------- 6. 출력 ----------------
+write_data      slab_raw.data
+System init for write_data ...
+PPPM initialization ...
+  using 12-bit tables for long-range coulomb (src/kspace.cpp:342)
+  G vector (1/distance) = 0.28691472
+  grid = 24 24 150
+  stencil order = 5
+  estimated absolute RMS force accuracy = 0.0014543415
+  estimated relative force accuracy = 0.00010099843
+  using double precision FFTW3
+  3d grid and FFT values/proc = 146072 86400
+Generated 0 of 1 mixed pair_coeff terms from geometric mixing rule
+write_dump      all atom slab_raw.lammpstrj
+Total wall time: 0:00:00
